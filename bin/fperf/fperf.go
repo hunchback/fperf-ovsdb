@@ -1,8 +1,8 @@
 package main
 
 import (
-	_ "github.com/fperf/etcd"
 	"github.com/fperf/fperf"
+	_ "github.com/hunchback/fperf-ovsdb"
 )
 
 func main() {
