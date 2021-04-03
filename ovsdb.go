@@ -3,6 +3,7 @@ package ovsdb
 import (
 	"fmt"
 	"math/rand"
+	"time"
 
 	"github.com/ebay/libovsdb"
 	"github.com/fperf/fperf"
@@ -13,6 +14,7 @@ const (
 	OP_UPDATE string = "update"
 	OP_DELETE string = "delete"
 	OP_SELECT string = "select"
+	OP_MUTATE string = "mutate"
 )
 
 const (
@@ -29,9 +31,10 @@ type Op string
 
 // Operations
 const (
-	Put    Op = "put"
-	Get    Op = "get"
-	Range  Op = "range"
+	Insert Op = "insert"
+	Select Op = "select"
+	Update Op = "update"
+	Mutate Op = "mutate"
 	Delete Op = "delete"
 )
 
@@ -43,20 +46,33 @@ type client struct {
 
 // New creates a fperf client
 func New(fs *fperf.FlagSet) fperf.Client {
-	var keySize int
 	var op Op
-	fs.IntVar(&keySize, "key-size", 4, "length of the random key")
 	fs.Parse()
 	args := fs.Args()
 	if len(args) == 0 {
-		op = Put
+		op = Select
 	} else {
 		op = Op(args[0])
 	}
 	return &client{
-		op:    op,
+		op: op,
 	}
 }
+
+type myNotifier struct {
+}
+
+func (n myNotifier) Update(context interface{}, tableUpdates libovsdb.TableUpdates) {
+}
+func (n myNotifier) Locked([]interface{}) {
+}
+func (n myNotifier) Stolen([]interface{}) {
+}
+func (n myNotifier) Echo([]interface{}) {
+}
+func (n myNotifier) Disconnected(client *libovsdb.OvsdbClient) {
+}
+
 
 // Dial to ovsdb
 func (c *client) Dial(addr string) error {
@@ -64,6 +80,8 @@ func (c *client) Dial(addr string) error {
 	if err != nil {
 		return fmt.Errorf("Dial error: %s", err)
 	}
+	//var notifier myNotifier
+	//cli.Register(notifier)
 	c.ovsdb = cli
 	return initUUID(c)
 }
@@ -71,19 +89,21 @@ func (c *client) Dial(addr string) error {
 // Request ovsdb
 func (c *client) Request() error {
 	switch c.op {
-	case Put:
-		return doPut(c)
-	case Get:
-		return doGet(c)
-	case Range:
-		return doRange(c)
+	case Insert:
+		return doInsert(c)
+	case Select:
+		return doSelect(c)
+	case Update:
+		return doUpdate(c)
+	case Mutate:
+		return doMutate(c)
 	case Delete:
 		return doDelete(c)
 	}
 	return fmt.Errorf("unknown op %s", c.op)
 }
 
-func doPut(c *client) error {
+func doInsert(c *client) error {
 	row := map[string]interface{}{
 		"name": "name",
 		"code": 210,
@@ -133,7 +153,7 @@ func getUUID(c *client) (libovsdb.UUID, error) {
 	return c.uuids[rand.Intn(len(c.uuids))], nil
 }
 
-func doGet(c *client) error {
+func doSelect(c *client) error {
 	uuid, err := getUUID(c)
 	if err != nil {
 		return err
@@ -151,13 +171,62 @@ func doGet(c *client) error {
 	return isTransactError(reply, err, operations)
 }
 
-func doDelete(c *client) error {
-	return nil // TODO: missing
+func doUpdate(c *client) error {
+	uuid, err := getUUID(c)
+	if err != nil {
+		return err
+	}
+	condition := libovsdb.NewCondition("_uuid", "==", uuid)
+	str := fmt.Sprintf("%s", time.Now().UnixNano())
+	selectOp := libovsdb.Operation{
+		Op:    OP_UPDATE,
+		Table: TABLE,
+		Where: []interface{}{condition},
+		Row:   map[string]interface{}{"name": str},
+	}
+	operations := []libovsdb.Operation{selectOp}
+	reply, err := c.ovsdb.Transact(DBNAME, operations...)
+	// fmt.Printf("reply=%+v\n", reply)
+	// fmt.Printf("err=%+v\n", err)
+	return isTransactError(reply, err, operations)
 }
 
-func doRange(c *client) error {
-	return nil // TODO: missing
+func doMutate(c *client) error {
+	uuid, err := getUUID(c)
+	if err != nil {
+		return err
+	}
+	condition := libovsdb.NewCondition("_uuid", "==", uuid)
+	mutation := libovsdb.NewMutation("code", "+=", 1)
+	selectOp := libovsdb.Operation{
+		Op:    OP_MUTATE,
+		Table: TABLE,
+		Where: []interface{}{condition},
+		Mutations: []interface{}{mutation},
+	}
+	operations := []libovsdb.Operation{selectOp}
+	reply, err := c.ovsdb.Transact(DBNAME, operations...)
+	// fmt.Printf("reply=%+v\n", reply)
+	// fmt.Printf("err=%+v\n", err)
+	return isTransactError(reply, err, operations)
 }
+
+func doDelete(c *client) error {
+	uuid, err := getUUID(c)
+	if err != nil {
+		return err
+	}
+	condition := libovsdb.NewCondition("_uuid", "==", uuid)
+	selectOp := libovsdb.Operation{
+		Op:    OP_DELETE,
+		Table: TABLE,
+		Where: []interface{}{condition},
+	}
+	operations := []libovsdb.Operation{selectOp}
+	reply, err := c.ovsdb.Transact(DBNAME, operations...)
+	return isTransactError(reply, err, operations)
+}
+
 
 func isTransactError(reply []libovsdb.OperationResult, err error, operations ...[]libovsdb.Operation) error {
 	if err != nil {
